@@ -422,28 +422,31 @@ async def search_news(request: PromptRequest):
     # should change into simple factory pattern
     news_items = get_new_info(keywords, is_initial=False)
     for news in news_items:
-        response = requests.get(news["titleLink"])
-        soup = BeautifulSoup(response.text, "html.parser")
-        # 標題
-        title = soup.find("h1", class_="article-content__title").text
-        time = soup.find("time", class_="article-content__time").text
-        # 定位到包含文章内容的 <section>
-        content_section = soup.find("section", class_="article-content__editor")
+        try:
+            response = requests.get(news["titleLink"])
+            soup = BeautifulSoup(response.text, "html.parser")
+            # 標題
+            title = soup.find("h1", class_="article-content__title").text
+            time = soup.find("time", class_="article-content__time").text
+            # 定位到包含文章内容的 <section>
+            content_section = soup.find("section", class_="article-content__editor")
 
-        paragraphs = [
-            p.text
-            for p in content_section.find_all("p")
-            if p.text.strip() != "" and "▪" not in p.text
-        ]
-        detailed_news = {
-            "url": news["titleLink"],
-            "title": title,
-            "time": time,
-            "content": paragraphs,
-        }
-        detailed_news["content"] = " ".join(detailed_news["content"])
-        detailed_news["id"] = next(_id_counter)
-        news_list.append(detailed_news)
+            paragraphs = [
+                p.text
+                for p in content_section.find_all("p")
+                if p.text.strip() != "" and "▪" not in p.text
+            ]
+            detailed_news = {
+                "url": news["titleLink"],
+                "title": title,
+                "time": time,
+                "content": paragraphs,
+            }
+            detailed_news["content"] = " ".join(detailed_news["content"])
+            detailed_news["id"] = next(_id_counter)
+            news_list.append(detailed_news)
+        except Exception as e:
+            print(e)
     return sorted(news_list, key=lambda x: x["time"], reverse=True)
 
 class NewsSumaryRequestSchema(BaseModel):
