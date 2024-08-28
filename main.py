@@ -410,11 +410,6 @@ def shutdown_scheduler():
 async def trigger_error():
     division_by_zero = 1 / 0 # noqa
 
-
-
-
-# users api
-app = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
@@ -513,10 +508,6 @@ def create_user(user: UserAuthSchema, db: Session = Depends(session_opener)):
 @app.get("/me", response_model=UserSchema)
 def read_users_me(user: str = Depends(authenticate_user_token)):
     return {"username": user.username}
-
-
-#news api
-app = APIRouter()
 
 udn_crawler = UDNCrawler()
 
@@ -652,8 +643,6 @@ def exists(news_id: int, db: Session):
     return db.query(NewsArticle).filter_by(id=news_id).first() is not None
 
 
-app = APIRouter()
-
 @app.get("/necessities-price", response_model=List[NecessityPrice])
 def get_necessities_prices(
     category: Optional[str] = Query(None), commodity: Optional[str] = Query(None)
@@ -666,5 +655,3 @@ def get_necessities_prices(
 
 
     return response.json()
-
-app.include_router(app, prefix="/v1")
