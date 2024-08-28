@@ -126,7 +126,7 @@ from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
 
-def save_news_content(news_data):
+def add_new(news_data):
     session = Session()
     session.add(NewsArticle(
         url=news_data["url"],
@@ -140,19 +140,23 @@ def save_news_content(news_data):
     session.close()
 
 
-def fetch_news_data(search_term, is_initial=False):
+def get_new_info(search_term, is_initial=False):
     all_news_data = []
     # iterate pages to get more news data, not actually get all news data
     if is_initial:
-        for page in range(1, 10):
-            params = {
-                "page": page,
+        a = []
+        for p in range(1, 10):
+            p2 = {
+                "page": p,
                 "id": f"search:{quote(search_term)}",
                 "channelId": 2,
                 "type": "searchword",
             }
-            response = requests.get("https://udn.com/api/more", params=params)
-            all_news_data.extend(response.json()["lists"])
+            response = requests.get("https://udn.com/api/more", params=p2)
+            a.append(response.json()["lists"])
+
+        for l in a:
+            all_news_data.append(l)
     else:
         p = {
             "page": 1,
@@ -165,22 +169,22 @@ def fetch_news_data(search_term, is_initial=False):
         all_news_data = response.json()["lists"]
     return all_news_data
 
-def fetch_news_task(is_initial=False):
-    news_data = fetch_news_data("價格", is_initial=is_initial)
+def get_new(is_initial=False):
+    news_data = get_new_info("價格", is_initial=is_initial)
     for news in news_data:
         m = [
             {
                 "role": "system",
                 "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
             },
-            {"role": "user", "content": f"{title}"},
+            {"role": "user", "content": f"{news["title"]}"},
         ]
 
-        completion = OpenAI(api_key="xxx").chat.completions.create(
+        ai = OpenAI(api_key="xxx").chat.completions.create(
             model="gpt-3.5-turbo",
             messages=m,
         )
-        relevance = completion.choices[0].message.content
+        relevance = ai.choices[0].message.content
         if relevance == "high":
             response = requests.get(news["titleLink"])
             soup = BeautifulSoup(response.text, "html.parser")
@@ -217,7 +221,7 @@ def fetch_news_task(is_initial=False):
             result = json.loads(result)
             detailed_news["summary"] = result["影響"]
             detailed_news["reason"] = result["原因"]
-            save_news_content(detailed_news)
+            add_new(detailed_news)
 
 
 @app.on_event("startup")
@@ -225,9 +229,9 @@ def start_scheduler():
     db = SessionLocal()
     if db.query(NewsArticle).count() == 0:
         # should change into simple factory pattern
-        fetch_news_task(is_init=True)
+        get_new()
     db.close()
-    bgs.add_job(fetch_news_task, "interval", minutes=100)
+    bgs.add_job(get_new, "interval", minutes=100)
     bgs.start()
 
 
@@ -258,7 +262,7 @@ def verify(p1, p2):
     return pwd_context.verify(p1, p2)
 
 
-def authenticate_user(db, n, pwd):
+def check_user_password_is_correct(db, n, pwd):
     user = db.query(User).filter(User.username == n).first()
     if not verify(pwd, user.hashed_password):
         return False
@@ -266,9 +270,10 @@ def authenticate_user(db, n, pwd):
 
 
 def authenticate_user_token(
-        token: str = Depends(oauth2_scheme), db: Session = Depends(session_opener)
+    OuO = Depends(oauth2_scheme),
+    db = Depends(session_opener)
 ):
-    payload = jwt.decode(token, '1892dhianiandowqd0n', algorithms=["HS256"])
+    payload = jwt.decode(OuO, '1892dhianiandowqd0n', algorithms=["HS256"])
     return db.query(User).filter(User.username == payload.get("sub")).first()
 
 
@@ -288,7 +293,7 @@ def create_access_token(data, expires_delta=None):
 async def login_for_access_token(
         form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(session_opener)
 ):
-    user = authenticate_user(db, form_data.username, form_data.password)
+    user = check_user_password_is_correct(db, form_data.username, form_data.password)
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(user.username)}, expires_delta=access_token_expires
@@ -382,7 +387,7 @@ async def search_news(request):
     )
     keywords = completion.choices[0].message.content
     # should change into simple factory pattern
-    news_items = fetch_news_data(keywords, is_initial=False)
+    news_items = get_new_info(keywords, is_initial=False)
     for news in news_items:
         response = requests.get(news["titleLink"])
         soup = BeautifulSoup(response.text, "html.parser")
