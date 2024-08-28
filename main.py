@@ -184,44 +184,37 @@ def update_recent_news(page, search_term):
     response = requests.get("https://udn.com/api/more", params=params)
     return response.json()["lists"]
 
-
-def news_parser(news_url):
-    response = requests.get(news_url)
-    soup = BeautifulSoup(response.text, "html.parser")
-    # 標題
-    title = soup.find("h1", class_="article-content__title").text
-    time = soup.find("time", class_="article-content__time").text
-    # 定位到包含文章内容的 <section>
-    content_section = soup.find("section", class_="article-content__editor")
-
-    paragraphs = [
-        p.text
-        for p in content_section.find_all("p")
-        if p.text.strip() != "" and "▪" not in p.text
-    ]
-    return {
-        "url": news_url,
-        "title": title,
-        "time": time,
-        "content": paragraphs,
-    }
-
-
 def fetch_news_task(is_initial=False):
     news_data = fetch_news_data("價格", is_initial=is_initial)
     for news in news_data:
         relevance = evaluate_relevance(news["title"])
         if relevance == "high":
-            detailed_news = news_parser(news["titleLink"])
-            if detailed_news:
-                result = generate_summary(
-                    " ".join(detailed_news["content"])
-                )
-                if result:
-                    result = json.loads(result)
-                    detailed_news["summary"] = result["影響"]
-                    detailed_news["reason"] = result["原因"]
-                    save_news_content(detailed_news)
+            response = requests.get(news["titleLink"])
+            soup = BeautifulSoup(response.text, "html.parser")
+            # 標題
+            title = soup.find("h1", class_="article-content__title").text
+            time = soup.find("time", class_="article-content__time").text
+            # 定位到包含文章内容的 <section>
+            content_section = soup.find("section", class_="article-content__editor")
+
+            paragraphs = [
+                p.text
+                for p in content_section.find_all("p")
+                if p.text.strip() != "" and "▪" not in p.text
+            ]
+            detailed_news =  {
+                "url": news["titleLink"],
+                "title": title,
+                "time": time,
+                "content": paragraphs,
+            }
+            result = generate_summary(
+                " ".join(detailed_news["content"])
+            )
+            result = json.loads(result)
+            detailed_news["summary"] = result["影響"]
+            detailed_news["reason"] = result["原因"]
+            save_news_content(detailed_news)
 
 
 @app.on_event("startup")
@@ -380,7 +373,25 @@ async def search_news(request):
     # should change into simple factory pattern
     news_items = fetch_news_data(keywords, is_initial=False)
     for news in news_items:
-        detailed_news = news_parser(news["titleLink"])
+        response = requests.get(news["titleLink"])
+        soup = BeautifulSoup(response.text, "html.parser")
+        # 標題
+        title = soup.find("h1", class_="article-content__title").text
+        time = soup.find("time", class_="article-content__time").text
+        # 定位到包含文章内容的 <section>
+        content_section = soup.find("section", class_="article-content__editor")
+
+        paragraphs = [
+            p.text
+            for p in content_section.find_all("p")
+            if p.text.strip() != "" and "▪" not in p.text
+        ]
+        detailed_news = {
+            "url": news["titleLink"],
+            "title": title,
+            "time": time,
+            "content": paragraphs,
+        }
         detailed_news["content"] = " ".join(detailed_news["content"])
         detailed_news["id"] = next(_id_counter)
         news_list.append(detailed_news)
