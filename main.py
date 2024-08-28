@@ -31,7 +31,7 @@ user_news_association_table = Table(
     ),
 )
 
-from pydantic import BaseModel
+# from pydantic import BaseModel
 
 
 class User(Base):
@@ -68,12 +68,7 @@ Session = sessionmaker(bind=engine)
 
 sentry_sdk.init(
     dsn="https://4001ffe917ccb261aa0e0c34026dc343@o4505702629834752.ingest.us.sentry.io/4507694792704000",
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for performance monitoring.
     traces_sample_rate=1.0,
-    # Set profiles_sample_rate to 1.0 to profile 100%
-    # of sampled transactions.
-    # We recommend adjusting this value in production.
     profiles_sample_rate=1.0,
 )
 
@@ -93,52 +88,36 @@ import os
 from openai import OpenAI
 
 
-def evaluate_relevance(title):
-    m = [
-        {
-            "role": "system",
-            "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
-        },
-        {"role": "user", "content": f"{title}"},
-    ]
+# def generate_summary(content):
+#     m = [
+#         {
+#             "role": "system",
+#             "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
+#         },
+#         {"role": "user", "content": f"{content}"},
+#     ]
+#
+#     completion = OpenAI(api_key="xxx").chat.completions.create(
+#         model="gpt-3.5-turbo",
+#         messages=m,
+#     )
+#     return completion.choices[0].message.content
 
-    completion = OpenAI(api_key="xxx").chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=m,
-    )
-    return completion.choices[0].message.content
-
-
-def generate_summary(content):
-    m = [
-        {
-            "role": "system",
-            "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
-        },
-        {"role": "user", "content": f"{content}"},
-    ]
-
-    completion = OpenAI(api_key="xxx").chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=m,
-    )
-    return completion.choices[0].message.content
-
-
-def extract_search_keywords(content):
-    m = [
-        {
-            "role": "system",
-            "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
-        },
-        {"role": "user", "content": f"{content}"},
-    ]
-
-    completion = OpenAI(api_key="xxx").chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=m,
-    )
-    return completion.choices[0].message.content
+#
+# def extract_search_keywords(content):
+#     m = [
+#         {
+#             "role": "system",
+#             "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
+#         },
+#         {"role": "user", "content": f"{content}"},
+#     ]
+#
+#     completion = OpenAI(api_key="xxx").chat.completions.create(
+#         model="gpt-3.5-turbo",
+#         messages=m,
+#     )
+#     return completion.choices[0].message.content
 
 
 from urllib.parse import quote
@@ -149,15 +128,14 @@ from sqlalchemy.orm import Session
 
 def save_news_content(news_data):
     session = Session()
-    new_article = NewsArticle(
+    session.add(NewsArticle(
         url=news_data["url"],
         title=news_data["title"],
         time=news_data["time"],
         content=" ".join(news_data["content"]),  # 將內容list轉換為字串
         summary=news_data["summary"],
         reason=news_data["reason"],
-    )
-    session.add(new_article)
+    ))
     session.commit()
     session.close()
 
@@ -167,27 +145,42 @@ def fetch_news_data(search_term, is_initial=False):
     # iterate pages to get more news data, not actually get all news data
     if is_initial:
         for page in range(1, 10):
-            news_data = update_recent_news(page, search_term)
-            all_news_data.extend(news_data)
+            params = {
+                "page": page,
+                "id": f"search:{quote(search_term)}",
+                "channelId": 2,
+                "type": "searchword",
+            }
+            response = requests.get("https://udn.com/api/more", params=params)
+            all_news_data.extend(response.json()["lists"])
     else:
-        all_news_data = update_recent_news(1, search_term)
+        p = {
+            "page": 1,
+            "id": f"search:{quote(search_term)}",
+            "channelId": 2,
+            "type": "searchword",
+        }
+        response = requests.get("https://udn.com/api/more", params=p)
+
+        all_news_data = response.json()["lists"]
     return all_news_data
-
-
-def update_recent_news(page, search_term):
-    params = {
-        "page": page,
-        "id": f"search:{quote(search_term)}",
-        "channelId": 2,
-        "type": "searchword",
-    }
-    response = requests.get("https://udn.com/api/more", params=params)
-    return response.json()["lists"]
 
 def fetch_news_task(is_initial=False):
     news_data = fetch_news_data("價格", is_initial=is_initial)
     for news in news_data:
-        relevance = evaluate_relevance(news["title"])
+        m = [
+            {
+                "role": "system",
+                "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
+            },
+            {"role": "user", "content": f"{title}"},
+        ]
+
+        completion = OpenAI(api_key="xxx").chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=m,
+        )
+        relevance = completion.choices[0].message.content
         if relevance == "high":
             response = requests.get(news["titleLink"])
             soup = BeautifulSoup(response.text, "html.parser")
@@ -208,9 +201,19 @@ def fetch_news_task(is_initial=False):
                 "time": time,
                 "content": paragraphs,
             }
-            result = generate_summary(
-                " ".join(detailed_news["content"])
+            m = [
+                {
+                    "role": "system",
+                    "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
+                },
+                {"role": "user", "content": " ".join(detailed_news["content"])},
+            ]
+
+            completion = OpenAI(api_key="xxx").chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=m,
             )
+            result = completion.choices[0].message.content
             result = json.loads(result)
             detailed_news["summary"] = result["影響"]
             detailed_news["reason"] = result["原因"]
@@ -250,16 +253,13 @@ def session_opener():
         session.close()
 
 
-def get_user(db, name):
-    return db.query(User).filter(User.username == name).first()
+
+def verify(p1, p2):
+    return pwd_context.verify(p1, p2)
 
 
-def verify(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def authenticate_user(db, username, pwd):
-    user = get_user(db, username)
+def authenticate_user(db, n, pwd):
+    user = db.query(User).filter(User.username == n).first()
     if not verify(pwd, user.hashed_password):
         return False
     return user
@@ -368,8 +368,19 @@ def read_user_news(
 async def search_news(request):
     prompt = request.prompt
     news_list = []
+    m = [
+        {
+            "role": "system",
+            "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
+        },
+        {"role": "user", "content": f"{prompt}"},
+    ]
 
-    keywords = extract_search_keywords(prompt)
+    completion = OpenAI(api_key="xxx").chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=m,
+    )
+    keywords = completion.choices[0].message.content
     # should change into simple factory pattern
     news_items = fetch_news_data(keywords, is_initial=False)
     for news in news_items:
@@ -402,9 +413,20 @@ async def search_news(request):
 async def news_summary(
         payload, u=Depends(authenticate_user_token)
 ):
-    content = payload.content
     response = {}
-    result = generate_summary(content)
+    m = [
+        {
+            "role": "system",
+            "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
+        },
+        {"role": "user", "content": f"{payload.content}"},
+    ]
+
+    completion = OpenAI(api_key="xxx").chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=m,
+    )
+    result = completion.choices[0].message.content
     if result:
         result = json.loads(result)
         response["summary"] = result["影響"]
