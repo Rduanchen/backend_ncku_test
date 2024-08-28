@@ -34,69 +34,6 @@ user_news_association_table = Table(
 from pydantic import BaseModel
 
 
-class NecessityPrice(BaseModel):
-    類別: str
-    編號: int
-    產品名稱: str
-    規格: str
-    統計值: str
-    時間起點: str
-    時間終點: str
-
-
-class NewsArticleSchema(BaseModel):
-    id: int
-    url: str
-    title: str
-    time: str
-    content: str
-    summary: str
-    reason: str
-    upvotes: int
-    is_upvoted: bool
-
-    class Config:
-        from_attributes = True
-
-
-class SearchNewsArticleSchema(BaseModel):
-    id: int
-    url: str
-    title: str
-    time: str
-    content: str
-
-
-class NewsSummarySchema(BaseModel):
-    summary: str
-    reason: str
-
-
-class NewsSumaryRequestSchema(BaseModel):
-    content: str
-
-
-class PromptRequest(BaseModel):
-    prompt: str
-
-
-class TokenSchema(BaseModel):
-    access_token: str
-    token_type: str
-
-
-class UserSchema(BaseModel):
-    username: str
-
-    class Config:
-        from_attributes = True
-
-
-class UserAuthSchema(BaseModel):
-    username: str
-    password: str
-
-
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -216,21 +153,16 @@ from sqlalchemy.orm import Session
 
 def save_news_content(news_data):
     session = Session()
-    exists = (
-            session.query(NewsArticle).filter_by(url=news_data["url"]).first()
-            is not None
+    new_article = NewsArticle(
+        url=news_data["url"],
+        title=news_data["title"],
+        time=news_data["time"],
+        content=" ".join(news_data["content"]),  # 將內容list轉換為字串
+        summary=news_data["summary"],
+        reason=news_data["reason"],
     )
-    if not exists:
-        new_article = NewsArticle(
-            url=news_data["url"],
-            title=news_data["title"],
-            time=news_data["time"],
-            content=" ".join(news_data["content"]),  # 將內容list轉換為字串
-            summary=news_data["summary"],
-            reason=news_data["reason"],
-        )
-        session.add(new_article)
-        session.commit()
+    session.add(new_article)
+    session.commit()
     session.close()
 
 
@@ -247,66 +179,53 @@ def fetch_news_data(search_term, is_initial=False):
 
 
 def update_recent_news(page, search_term):
-    try:
-        params = {
-            "page": page,
-            "id": f"search:{quote(search_term)}",
-            "channelId": 2,
-            "type": "searchword",
-        }
-        response = requests.get("https://udn.com/api/more", params=params)
-        return response.json()["lists"] if response.status_code == 200 else []
-    except Exception:
-        return []
-
+    params = {
+        "page": page,
+        "id": f"search:{quote(search_term)}",
+        "channelId": 2,
+        "type": "searchword",
+    }
+    response = requests.get("https://udn.com/api/more", params=params)
+    return response.json()["lists"] if response.status_code == 200 else []
 
 def news_parser(news_url):
     response = requests.get(news_url)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        # 標題
-        title = soup.find("h1", class_="article-content__title").text
-        time = soup.find("time", class_="article-content__time").text
-        # 定位到包含文章内容的 <section>
-        content_section = soup.find("section", class_="article-content__editor")
-        if not content_section:
-            return None
-        # 過濾掉不需要的內容
-        paragraphs = [
-            p.text
-            for p in content_section.find_all("p")
-            if p.text.strip() != "" and "▪" not in p.text
-        ]
-        return {
-            "url": news_url,
-            "title": title,
-            "time": time,
-            "content": paragraphs,
-        }
-    else:
-        return None
+    soup = BeautifulSoup(response.text, "html.parser")
+    # 標題
+    title = soup.find("h1", class_="article-content__title").text
+    time = soup.find("time", class_="article-content__time").text
+    # 定位到包含文章内容的 <section>
+    content_section = soup.find("section", class_="article-content__editor")
+
+    paragraphs = [
+        p.text
+        for p in content_section.find_all("p")
+        if p.text.strip() != "" and "▪" not in p.text
+    ]
+    return {
+        "url": news_url,
+        "title": title,
+        "time": time,
+        "content": paragraphs,
+    }
+
 
 
 def fetch_news_task(is_initial=False):
-    # should change into simple factory pattern
     news_data = fetch_news_data("價格", is_initial=is_initial)
     for news in news_data:
-        try:
-            relevance = evaluate_relevance(news["title"])
-            if relevance == "high":
-                detailed_news = news_parser(news["titleLink"])
-                if detailed_news:
-                    result = generate_summary(
-                        " ".join(detailed_news["content"])
-                    )
-                    if result:
-                        result = json.loads(result)
-                        detailed_news["summary"] = result["影響"]
-                        detailed_news["reason"] = result["原因"]
-                        save_news_content(detailed_news)
-        except Exception as e:
-            print(f"Error processing news {news['titleLink']}: {e}")
-
+        relevance = evaluate_relevance(news["title"])
+        if relevance == "high":
+            detailed_news = news_parser(news["titleLink"])
+            if detailed_news:
+                result = generate_summary(
+                    " ".join(detailed_news["content"])
+                )
+                if result:
+                    result = json.loads(result)
+                    detailed_news["summary"] = result["影響"]
+                    detailed_news["reason"] = result["原因"]
+                    save_news_content(detailed_news)
 
 @app.on_event("startup")
 def start_scheduler():
@@ -322,12 +241,6 @@ def start_scheduler():
 @app.on_event("shutdown")
 def shutdown_scheduler():
     scheduler.shutdown()
-
-
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0  # noqa
-
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -346,15 +259,15 @@ def session_opener():
         session.close()
 
 
-def get_user(db: Session, name: str):
+def get_user(db, name):
     return db.query(User).filter(User.username == name).first()
 
 
-def verify(plain_password: str, hashed_password: str):
+def verify(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
-def authenticate_user(db: Session, username: str, pwd: str):
+def authenticate_user(db, username, pwd):
     user = get_user(db, username)
     if not user or not verify(pwd, user.hashed_password):
         return False
@@ -364,26 +277,11 @@ def authenticate_user(db: Session, username: str, pwd: str):
 def authenticate_user_token(
         token: str = Depends(oauth2_scheme), db: Session = Depends(session_opener)
 ):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    user = db.query(User).filter(User.username == username).first()
-    if user is None:
-        raise credentials_exception
-    return user
+    payload = jwt.decode(token, '1892dhianiandowqd0n', algorithms=["HS256"])
+    return db.query(User).filter(User.username == payload.get("sub")).first()
 
 
-def create_access_token(data: dict, expires_delta: timedelta = None):
+def create_access_token(data, expires_delta = None):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -391,21 +289,15 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
         expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     print(to_encode)
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, '1892dhianiandowqd0n', algorithm="HS256")
     return encoded_jwt
 
 
-@app.post("/login", response_model=TokenSchema)
+@app.post("/login")
 async def login_for_access_token(
         form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(session_opener)
 ):
     user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(user.username)}, expires_delta=access_token_expires
@@ -413,11 +305,8 @@ async def login_for_access_token(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@app.post("/register", response_model=UserSchema)
-def create_user(user: UserAuthSchema, db: Session = Depends(session_opener)):
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="Username already registered")
+@app.post("/register")
+def create_user(user, db: Session = Depends(session_opener)):
     hashed_password = pwd_context.hash(user.password)
     db_user = User(username=user.username, hashed_password=hashed_password)
     db.add(db_user)
@@ -426,7 +315,7 @@ def create_user(user: UserAuthSchema, db: Session = Depends(session_opener)):
     return db_user
 
 
-@app.get("/me", response_model=UserSchema)
+@app.get("/me")
 def read_users_me(user=Depends(authenticate_user_token)):
     return {"username": user.username}
 
@@ -451,8 +340,8 @@ def get_article_upvote_details(article_id, uid, db):
     return cnt, voted
 
 
-@app.get("/news", response_model=list[NewsArticleSchema])
-def read_news(db: Session = Depends(session_opener)):
+@app.get("/news")
+def read_news(db = Depends(session_opener)):
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
     for n in news:
@@ -464,12 +353,11 @@ def read_news(db: Session = Depends(session_opener)):
 
 
 @app.get(
-    "/user_news",
-    response_model=list[NewsArticleSchema],
-    description="獲取包含user upvote資訊的新聞列表",
+    "/user_news"
 )
 def read_user_news(
-        db: Session = Depends(session_opener), u: User = Depends(authenticate_user_token)
+        db = Depends(session_opener),
+        u = Depends(authenticate_user_token)
 ):
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
@@ -485,35 +373,27 @@ def read_user_news(
     return result
 
 
-@app.post("/search_news", response_model=list[SearchNewsArticleSchema])
-async def search_news(request: PromptRequest):
+@app.post("/search_news")
+async def search_news(request):
     prompt = request.prompt
     news_list = []
-    try:
-        keywords = extract_search_keywords(prompt)
-        if not keywords:
-            return []
-        # should change into simple factory pattern
-        news_items = fetch_news_data(keywords, is_initial=False)
-        for news in news_items:
-            try:
-                detailed_news = news_parser(news["titleLink"])
-                if detailed_news:
-                    detailed_news["content"] = " ".join(detailed_news["content"])
-                    detailed_news["id"] = next(_id_counter)
-                    news_list.append(detailed_news)
-            except Exception as e:
-                print(f"Error processing news {news['titleLink']}: {e}")
-        return sorted(news_list, key=lambda x: x["time"], reverse=True)
 
-    except Exception as e:
-        print("Error during process news: ", e)
+    keywords = extract_search_keywords(prompt)
+    if not keywords:
         return []
+    # should change into simple factory pattern
+    news_items = fetch_news_data(keywords, is_initial=False)
+    for news in news_items:
+        detailed_news = news_parser(news["titleLink"])
+        if detailed_news:
+            detailed_news["content"] = " ".join(detailed_news["content"])
+            detailed_news["id"] = next(_id_counter)
+            news_list.append(detailed_news)
+    return sorted(news_list, key=lambda x: x["time"], reverse=True)
 
-
-@app.post("/news_summary", response_model=NewsSummarySchema)
+@app.post("/news_summary")
 async def news_summary(
-        payload: NewsSumaryRequestSchema, user=Depends(authenticate_user_token)
+        payload, u=Depends(authenticate_user_token)
 ):
     content = payload.content
     response = {}
@@ -527,21 +407,15 @@ async def news_summary(
 
 @app.post("/{id}/upvote")
 def upvote_article(
-        id: int,
-        db: Session = Depends(session_opener),
-        u: User = Depends(authenticate_user_token),
+        id,
+        db = Depends(session_opener),
+        u = Depends(authenticate_user_token),
 ):
-    if not u:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    if not exists(id, db):
-        raise HTTPException(status_code=404, detail="News not found")
-
     message = toggle_upvote(id, u.id, db)
     return {"message": message}
 
 
-def toggle_upvote(n_id: int, u_id: int, db: Session):
+def toggle_upvote(n_id, u_id, db):
     existing_upvote = db.execute(
         select(user_news_association_table).where(
             user_news_association_table.c.news_articles_id == n_id,
@@ -566,18 +440,15 @@ def toggle_upvote(n_id: int, u_id: int, db: Session):
         return "Article upvoted"
 
 
-def exists(news_id: int, db: Session):
-    return db.query(NewsArticle).filter_by(id=news_id).first() is not None
+def news_exists(id2, db: Session):
+    return db.query(NewsArticle).filter_by(id=id2).first() is not None
 
 
-@app.get("/necessities-price", response_model=List[NecessityPrice])
+@app.get("/necessities-price")
 def get_necessities_prices(
-        category: Optional[str] = Query(None), commodity: Optional[str] = Query(None)
+        category = Query(None), commodity = Query(None)
 ):
-    response = requests.get(
+    return requests.get(
         "https://opendata.ey.gov.tw/api/ConsumerProtection/NecessitiesPrice",
         params={"CategoryName": category, "Name": commodity},
-    )
-    response.raise_for_status()
-
-    return response.json()
+    ).json()
