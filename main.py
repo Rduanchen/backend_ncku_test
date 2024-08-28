@@ -14,8 +14,6 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-from pydantic import AnyHttpUrl
-
 from pydantic import BaseModel, Field, AnyHttpUrl
 from sqlalchemy import (Column, ForeignKey, Integer, String, Table, Text,
                         create_engine)
@@ -131,43 +129,6 @@ Base.metadata.create_all(engine)
 
 Session = sessionmaker(bind=engine)
 
-
-class Headline(BaseModel):
-    title: str = Field(
-        default=...,
-        example="Title of the article",
-        description="The title of the article"
-    )
-    url: AnyHttpUrl | str = Field(
-        default=...,
-        example="https://www.example.com",
-        description="The URL of the article"
-    )
-
-class News(Headline):
-    time: str = Field(
-        default=...,
-        example="2021-10-01T00:00:00",
-        description="The time the article was published"
-    )
-    content: str = Field(
-        default=...,
-        example="Content of the article",
-        description="The content of the article"
-    )
-
-class NewsWithSummary(News):
-    summary: str = Field(
-        default=...,
-        example="Summary of the article",
-        description="The summary of the article"
-    )
-    reason: str = Field(
-        default=...,
-        example="Reason of the article",
-        description="The reason of the article"
-    )
-
 sentry_sdk.init(
     dsn="https://4001ffe917ccb261aa0e0c34026dc343@o4505702629834752.ingest.us.sentry.io/4507694792704000",
     # Set traces_sample_rate to 1.0 to capture 100%
@@ -184,7 +145,7 @@ scheduler = BackgroundScheduler()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app.add_middleware(
-    CORSMiddleware, # noqa
+    CORSMiddleware,  # noqa
     allow_origins=["http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
@@ -200,194 +161,151 @@ load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY", "")
 
 
-class OpenAIClient:
-    def __init__(self, _api_key: str):
-        self.client = OpenAI(api_key=_api_key)
+def evaluate_relevance(title):
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
+        },
+        {"role": "user", "content": f"{title}"},
+    ]
 
-    def _generate_text(self, messages=None, model="gpt-3.5-turbo"):
-        if not messages:
-            messages = [
-                {
-                    "role": "system",
-                    "content": "你是一個對話機器人，請回答以下問題。",
-                }
-            ]
-        completion = self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-        )
-        return completion.choices[0].message.content
-
-    def evaluate_relevance(self, title):
-        messages = [
-            {
-                "role": "system",
-                "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
-            },
-            {"role": "user", "content": f"{title}"},
-        ]
-        return openai_client._generate_text(messages=messages)
-
-    def generate_summary(self, content):
-        messages = [
-            {
-                "role": "system",
-                "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
-            },
-            {"role": "user", "content": f"{content}"},
-        ]
-        return openai_client._generate_text(messages=messages)
-
-    def extract_search_keywords(self, content):
-        messages = [
-            {
-                "role": "system",
-                "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
-            },
-            {"role": "user", "content": f"{content}"},
-        ]
-        return openai_client._generate_text(messages=messages)
+    completion = OpenAI(api_key=api_key).chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    return completion.choices[0].message.content
 
 
-openai_client = OpenAIClient(_api_key=api_key)
+def generate_summary(content):
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
+        },
+        {"role": "user", "content": f"{content}"},
+    ]
+
+    completion = OpenAI(api_key=api_key).chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    return completion.choices[0].message.content
+
+
+def extract_search_keywords(content):
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
+        },
+        {"role": "user", "content": f"{content}"},
+    ]
+
+    completion = OpenAI(api_key=api_key).chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    return completion.choices[0].message.content
 
 
 from urllib.parse import quote
 import requests
-from requests import Response
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
-
-class UDNCrawler():
-    CHANNEL_ID = 2
-
-    def __init__(self, timeout = 5):
-        self.news_website_url = "https://udn.com/api/more"
-        self.timeout = timeout
-
-    def startup(self, search_term: str) -> list[Headline]:
-        headlines = []
-        for p in range(1, 10):
-            params = {
-                "page": p,
-                "id": f"search:{quote(search_term)}",
-                "channelId": self.CHANNEL_ID,
-                "type": "searchword",
-            }
-            response = self.perform_request(params=params)
-            headline_list = self.parse_headlines(response) if response else []
-            for headline in headline_list:
-                headlines.append(headline)
-        return headlines
-
-    def get_headline(self, search_term, page):
-        headlines = []
-        page_range = range(*page) if isinstance(page, tuple) else [page]
-        for p in page_range:
-            params = {
-                "page": p,
-                "id": f"search:{quote(search_term)}",
-                "channelId": self.CHANNEL_ID,
-                "type": "searchword",
-            }
-            response = self.perform_request(params=params)
-            headline_list = self.parse_headlines(response) if response else []
-            for headline in headline_list:
-                headlines.append(headline)
-        return headlines
-
-    def perform_request(self, url = None, params = None) -> Response:
-        if not url:
-            url = self.news_website_url
-
-        if not params:
-            params = {}
-
-        try:
-            response = requests.get(
-                url, params=params, timeout=self.timeout
-            )
-            response.raise_for_status()
-            return response
-        except requests.RequestException as e:
-            raise ConnectionError(f"Error fetching news: {e}") from e
-
-    @staticmethod
-    def parse_headlines(response: Response):
-        data = response.json().get("lists", [])
-        return [
-            Headline(title=article["title"], url=article["titleLink"])
-            for article in data
-        ]
-
-    def parse(self, url):
-        response = self.perform_request(url=url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        return self.extract_news(soup, url)
-
-    @staticmethod
-    def extract_news(soup: BeautifulSoup, url):
-        title = soup.select_one("h1.article-content__title").text
-        time = soup.select_one("time.article-content__time").text
-        content = " ".join(
-            p.text
-            for p in soup.select("section.article-content__editor p")
-            if p.text.strip()
+def save_news_content(news_data):
+    session = Session()
+    exists = (
+            session.query(NewsArticle).filter_by(url=news_data["url"]).first()
+            is not None
+    )
+    if not exists:
+        new_article = NewsArticle(
+            url=news_data["url"],
+            title=news_data["title"],
+            time=news_data["time"],
+            content=" ".join(news_data["content"]),  # 將內容list轉換為字串
+            summary=news_data["summary"],
+            reason=news_data["reason"],
         )
-        return News(url=url, title=title, time=time, content=content, reason="", summary="")
-
-    def save(self, news: NewsWithSummary, db: Session):
-        existing_news = db.query(NewsArticle).filter_by(url=news.url).first()
-        if not existing_news:
-            new_article = NewsArticle(
-                url=news.url, title=news.title, time=news.time, content=news.content, summary=news.summary, reason=news.reason
-            )
-            db.add(new_article)
-            self.commit_changes(db)
-
-    @staticmethod
-    def commit_changes(db: Session):
-        try:
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            raise RuntimeError(f"Error saving news to database: {e}") from e
-        finally:
-            db.close()
+        session.add(new_article)
+        session.commit()
+    session.close()
 
 
-
-def fetch_news_task(is_init: bool = False):
-    db = SessionLocal()
-    # should change into simple factory pattern
-    udn_crawler = UDNCrawler()
-    if is_init:
-        news_data = udn_crawler.startup("價格")
+def fetch_news_data(search_term, is_initial=False):
+    all_news_data = []
+    # iterate pages to get more news data, not actually get all news data
+    if is_initial:
+        for page in range(1, 10):
+            news_data = update_recent_news(page, search_term)
+            all_news_data.extend(news_data)
     else:
-        news_data = udn_crawler.get_headline("價格", 1)
+        all_news_data = update_recent_news(1, search_term)
+    return all_news_data
+
+
+def update_recent_news(page, search_term):
+    try:
+        params = {
+            "page": page,
+            "id": f"search:{quote(search_term)}",
+            "channelId": 2,
+            "type": "searchword",
+        }
+        response = requests.get("https://udn.com/api/more", params=params)
+        return response.json()["lists"] if response.status_code == 200 else []
+    except Exception:
+        return []
+
+
+def news_parser(news_url):
+    response = requests.get(news_url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        # 標題
+        title = soup.find("h1", class_="article-content__title").text
+        time = soup.find("time", class_="article-content__time").text
+        # 定位到包含文章内容的 <section>
+        content_section = soup.find("section", class_="article-content__editor")
+        if not content_section:
+            return None
+        # 過濾掉不需要的內容
+        paragraphs = [
+            p.text
+            for p in content_section.find_all("p")
+            if p.text.strip() != "" and "▪" not in p.text
+        ]
+        return {
+            "url": news_url,
+            "title": title,
+            "time": time,
+            "content": paragraphs,
+        }
+    else:
+        return None
+
+
+def fetch_news_task(is_initial=False):
+    # should change into simple factory pattern
+    news_data = fetch_news_data("價格", is_initial=is_initial)
     for news in news_data:
         try:
-            relevance = openai_client.evaluate_relevance(news.title)
+            relevance = evaluate_relevance(news["title"])
             if relevance == "high":
-                detailed_news = udn_crawler.parse(news.url)
+                detailed_news = news_parser(news["titleLink"])
                 if detailed_news:
-                    result = openai_client.generate_summary(detailed_news.content)
+                    result = generate_summary(
+                        " ".join(detailed_news["content"])
+                    )
                     if result:
                         result = json.loads(result)
-                        news_with_summary = NewsWithSummary(
-                            title=detailed_news.title,
-                            url=detailed_news.url,
-                            time=detailed_news.time,
-                            content=detailed_news.content,
-                            summary=result.get("影響", ""),
-                            reason=result.get("原因", "")
-                        )
-                        print(news_with_summary)
-                        udn_crawler.save(news_with_summary, db)
-                        print(f"Saved news {detailed_news.url}")
+                        detailed_news["summary"] = result["影響"]
+                        detailed_news["reason"] = result["原因"]
+                        save_news_content(detailed_news)
         except Exception as e:
-            print(f"Error processing news {news.url}: {e}")
+            print(f"Error processing news {news['titleLink']}: {e}")
 
 
 @app.on_event("startup")
@@ -408,7 +326,8 @@ def shutdown_scheduler():
 
 @app.get("/sentry-debug")
 async def trigger_error():
-    division_by_zero = 1 / 0 # noqa
+    division_by_zero = 1 / 0  # noqa
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -418,12 +337,14 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/users/login")
 
+
 def session_opener():
     session = Session(bind=engine)
     try:
         yield session
     finally:
         session.close()
+
 
 def get_user(db: Session, name: str):
     return db.query(User).filter(User.username == name).first()
@@ -441,7 +362,7 @@ def authenticate_user(db: Session, username: str, pwd: str):
 
 
 def authenticate_user_token(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(session_opener)
+        token: str = Depends(oauth2_scheme), db: Session = Depends(session_opener)
 ):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -476,7 +397,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 @app.post("/login", response_model=TokenSchema)
 async def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(session_opener)
+        form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(session_opener)
 ):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -506,12 +427,12 @@ def create_user(user: UserAuthSchema, db: Session = Depends(session_opener)):
 
 
 @app.get("/me", response_model=UserSchema)
-def read_users_me(user: str = Depends(authenticate_user_token)):
+def read_users_me(user=Depends(authenticate_user_token)):
     return {"username": user.username}
 
-udn_crawler = UDNCrawler()
 
 _id_counter = itertools.count(start=1000000)
+
 
 def get_article_upvote_details(article_id, uid, db):
     cnt = (
@@ -522,10 +443,10 @@ def get_article_upvote_details(article_id, uid, db):
     voted = False
     if uid:
         voted = (
-            db.query(user_news_association_table)
-            .filter_by(news_articles_id=article_id, user_id=uid)
-            .first()
-            is not None
+                db.query(user_news_association_table)
+                .filter_by(news_articles_id=article_id, user_id=uid)
+                .first()
+                is not None
         )
     return cnt, voted
 
@@ -548,7 +469,7 @@ def read_news(db: Session = Depends(session_opener)):
     description="獲取包含user upvote資訊的新聞列表",
 )
 def read_user_news(
-    db: Session = Depends(session_opener), u: User = Depends(authenticate_user_token)
+        db: Session = Depends(session_opener), u: User = Depends(authenticate_user_token)
 ):
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
@@ -567,42 +488,48 @@ def read_user_news(
 @app.post("/search_news", response_model=list[SearchNewsArticleSchema])
 async def search_news(request: PromptRequest):
     prompt = request.prompt
-    newss = []
-    keywords = openai_client.extract_search_keywords(prompt)
-    if not keywords:
+    news_list = []
+    try:
+        keywords = extract_search_keywords(prompt)
+        if not keywords:
+            return []
+        # should change into simple factory pattern
+        news_items = fetch_news_data(keywords, is_initial=False)
+        for news in news_items:
+            try:
+                detailed_news = news_parser(news["titleLink"])
+                if detailed_news:
+                    detailed_news["content"] = " ".join(detailed_news["content"])
+                    detailed_news["id"] = next(_id_counter)
+                    news_list.append(detailed_news)
+            except Exception as e:
+                print(f"Error processing news {news['titleLink']}: {e}")
+        return sorted(news_list, key=lambda x: x["time"], reverse=True)
+
+    except Exception as e:
+        print("Error during process news: ", e)
         return []
-    # should change into simple factory pattern
-    news = udn_crawler.get_headline(keywords, page=1)
-    for n in news:
-        try:
-            detailed_n = udn_crawler.parse(n.url)
-            if detailed_n:
-                detailed_news_dict = detailed_n.model_dump()
-                detailed_news_dict["id"] = next(_id_counter)
-                newss.append(detailed_news_dict)
-        except Exception as e:
-            print(f"Error processing news {n.url}: {e}")
-    return sorted(newss, key=lambda x: x["time"], reverse=True)
 
 
 @app.post("/news_summary", response_model=NewsSummarySchema)
 async def news_summary(
-    payload: NewsSumaryRequestSchema, user=Depends(authenticate_user_token)
+        payload: NewsSumaryRequestSchema, user=Depends(authenticate_user_token)
 ):
     content = payload.content
     response = {}
-    result = openai_client.generate_summary(content)
+    result = generate_summary(content)
     if result:
         result = json.loads(result)
         response["summary"] = result["影響"]
         response["reason"] = result["原因"]
     return response
 
+
 @app.post("/{id}/upvote")
 def upvote_article(
-    id: int,
-    db: Session = Depends(session_opener),
-    u: User = Depends(authenticate_user_token),
+        id: int,
+        db: Session = Depends(session_opener),
+        u: User = Depends(authenticate_user_token),
 ):
     if not u:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -645,13 +572,12 @@ def exists(news_id: int, db: Session):
 
 @app.get("/necessities-price", response_model=List[NecessityPrice])
 def get_necessities_prices(
-    category: Optional[str] = Query(None), commodity: Optional[str] = Query(None)
+        category: Optional[str] = Query(None), commodity: Optional[str] = Query(None)
 ):
     response = requests.get(
         "https://opendata.ey.gov.tw/api/ConsumerProtection/NecessitiesPrice",
         params={"CategoryName": category, "Name": commodity},
     )
     response.raise_for_status()
-
 
     return response.json()
