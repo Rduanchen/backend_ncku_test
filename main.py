@@ -78,7 +78,7 @@ sentry_sdk.init(
 )
 
 app = FastAPI()
-scheduler = BackgroundScheduler()
+bgs = BackgroundScheduler()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app.add_middleware(
@@ -90,16 +90,11 @@ app.add_middleware(
 )
 
 import os
-
-from dotenv import load_dotenv
 from openai import OpenAI
-
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY", "")
 
 
 def evaluate_relevance(title):
-    messages = [
+    m = [
         {
             "role": "system",
             "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
@@ -107,15 +102,15 @@ def evaluate_relevance(title):
         {"role": "user", "content": f"{title}"},
     ]
 
-    completion = OpenAI(api_key=api_key).chat.completions.create(
+    completion = OpenAI(api_key="xxx").chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=m,
     )
     return completion.choices[0].message.content
 
 
 def generate_summary(content):
-    messages = [
+    m = [
         {
             "role": "system",
             "content": "你是一個新聞摘要生成機器人，請統整新聞中提及的影響及主要原因 (影響、原因各50個字，請以json格式回答 {'影響': '...', '原因': '...'})",
@@ -123,15 +118,15 @@ def generate_summary(content):
         {"role": "user", "content": f"{content}"},
     ]
 
-    completion = OpenAI(api_key=api_key).chat.completions.create(
+    completion = OpenAI(api_key="xxx").chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=m,
     )
     return completion.choices[0].message.content
 
 
 def extract_search_keywords(content):
-    messages = [
+    m = [
         {
             "role": "system",
             "content": "你是一個關鍵字提取機器人，用戶將會輸入一段文字，表示其希望看見的新聞內容，請提取出用戶希望看見的關鍵字，請截取最重要的關鍵字即可，避免出現「新聞」、「資訊」等混淆搜尋引擎的字詞。(僅須回答關鍵字，若有多個關鍵字，請以空格分隔)",
@@ -139,9 +134,9 @@ def extract_search_keywords(content):
         {"role": "user", "content": f"{content}"},
     ]
 
-    completion = OpenAI(api_key=api_key).chat.completions.create(
+    completion = OpenAI(api_key="xxx").chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=m,
     )
     return completion.choices[0].message.content
 
@@ -150,6 +145,7 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
+
 
 def save_news_content(news_data):
     session = Session()
@@ -186,7 +182,8 @@ def update_recent_news(page, search_term):
         "type": "searchword",
     }
     response = requests.get("https://udn.com/api/more", params=params)
-    return response.json()["lists"] if response.status_code == 200 else []
+    return response.json()["lists"]
+
 
 def news_parser(news_url):
     response = requests.get(news_url)
@@ -210,7 +207,6 @@ def news_parser(news_url):
     }
 
 
-
 def fetch_news_task(is_initial=False):
     news_data = fetch_news_data("價格", is_initial=is_initial)
     for news in news_data:
@@ -227,6 +223,7 @@ def fetch_news_task(is_initial=False):
                     detailed_news["reason"] = result["原因"]
                     save_news_content(detailed_news)
 
+
 @app.on_event("startup")
 def start_scheduler():
     db = SessionLocal()
@@ -234,13 +231,14 @@ def start_scheduler():
         # should change into simple factory pattern
         fetch_news_task(is_init=True)
     db.close()
-    scheduler.add_job(fetch_news_task, "interval", minutes=100)
-    scheduler.start()
+    bgs.add_job(fetch_news_task, "interval", minutes=100)
+    bgs.start()
 
 
 @app.on_event("shutdown")
 def shutdown_scheduler():
-    scheduler.shutdown()
+    bgs.shutdown()
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -269,7 +267,7 @@ def verify(plain_password, hashed_password):
 
 def authenticate_user(db, username, pwd):
     user = get_user(db, username)
-    if not user or not verify(pwd, user.hashed_password):
+    if not verify(pwd, user.hashed_password):
         return False
     return user
 
@@ -281,7 +279,7 @@ def authenticate_user_token(
     return db.query(User).filter(User.username == payload.get("sub")).first()
 
 
-def create_access_token(data, expires_delta = None):
+def create_access_token(data, expires_delta=None):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -341,7 +339,7 @@ def get_article_upvote_details(article_id, uid, db):
 
 
 @app.get("/news")
-def read_news(db = Depends(session_opener)):
+def read_news(db=Depends(session_opener)):
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
     for n in news:
@@ -356,8 +354,8 @@ def read_news(db = Depends(session_opener)):
     "/user_news"
 )
 def read_user_news(
-        db = Depends(session_opener),
-        u = Depends(authenticate_user_token)
+        db=Depends(session_opener),
+        u=Depends(authenticate_user_token)
 ):
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
@@ -379,17 +377,15 @@ async def search_news(request):
     news_list = []
 
     keywords = extract_search_keywords(prompt)
-    if not keywords:
-        return []
     # should change into simple factory pattern
     news_items = fetch_news_data(keywords, is_initial=False)
     for news in news_items:
         detailed_news = news_parser(news["titleLink"])
-        if detailed_news:
-            detailed_news["content"] = " ".join(detailed_news["content"])
-            detailed_news["id"] = next(_id_counter)
-            news_list.append(detailed_news)
+        detailed_news["content"] = " ".join(detailed_news["content"])
+        detailed_news["id"] = next(_id_counter)
+        news_list.append(detailed_news)
     return sorted(news_list, key=lambda x: x["time"], reverse=True)
+
 
 @app.post("/news_summary")
 async def news_summary(
@@ -408,8 +404,8 @@ async def news_summary(
 @app.post("/{id}/upvote")
 def upvote_article(
         id,
-        db = Depends(session_opener),
-        u = Depends(authenticate_user_token),
+        db=Depends(session_opener),
+        u=Depends(authenticate_user_token),
 ):
     message = toggle_upvote(id, u.id, db)
     return {"message": message}
@@ -446,7 +442,7 @@ def news_exists(id2, db: Session):
 
 @app.get("/necessities-price")
 def get_necessities_prices(
-        category = Query(None), commodity = Query(None)
+        category=Query(None), commodity=Query(None)
 ):
     return requests.get(
         "https://opendata.ey.gov.tw/api/ConsumerProtection/NecessitiesPrice",
