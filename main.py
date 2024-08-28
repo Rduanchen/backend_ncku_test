@@ -127,6 +127,11 @@ from sqlalchemy.orm import Session
 
 
 def add_new(news_data):
+    """
+    add new to db
+    :param news_data: news info
+    :return:
+    """
     session = Session()
     session.add(NewsArticle(
         url=news_data["url"],
@@ -141,6 +146,13 @@ def add_new(news_data):
 
 
 def get_new_info(search_term, is_initial=False):
+    """
+    get new
+
+    :param search_term:
+    :param is_initial:
+    :return:
+    """
     all_news_data = []
     # iterate pages to get more news data, not actually get all news data
     if is_initial:
@@ -170,14 +182,21 @@ def get_new_info(search_term, is_initial=False):
     return all_news_data
 
 def get_new(is_initial=False):
+    """
+    get new info
+
+    :param is_initial:
+    :return:
+    """
     news_data = get_new_info("價格", is_initial=is_initial)
+    title = news_data["title"]
     for news in news_data:
         m = [
             {
                 "role": "system",
                 "content": "你是一個關聯度評估機器人，請評估新聞標題是否與「民生用品的價格變化」相關，並給予'high'、'medium'、'low'評價。(僅需回答'high'、'medium'、'low'三個詞之一)",
             },
-            {"role": "user", "content": f"{news["title"]}"},
+            {"role": "user", "content": f"{title}"},
         ]
 
         ai = OpenAI(api_key="xxx").chat.completions.create(
@@ -241,11 +260,6 @@ def shutdown_scheduler():
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-SECRET_KEY = os.environ.get("SECRET_KEY")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/users/login")
 
 
@@ -263,21 +277,22 @@ def verify(p1, p2):
 
 
 def check_user_password_is_correct(db, n, pwd):
-    user = db.query(User).filter(User.username == n).first()
-    if not verify(pwd, user.hashed_password):
+    OuO = db.query(User).filter(User.username == n).first()
+    if not verify(pwd, OuO.hashed_password):
         return False
-    return user
+    return OuO
 
 
 def authenticate_user_token(
-    OuO = Depends(oauth2_scheme),
+    token = Depends(oauth2_scheme),
     db = Depends(session_opener)
 ):
-    payload = jwt.decode(OuO, '1892dhianiandowqd0n', algorithms=["HS256"])
+    payload = jwt.decode(token, '1892dhianiandowqd0n', algorithms=["HS256"])
     return db.query(User).filter(User.username == payload.get("sub")).first()
 
 
 def create_access_token(data, expires_delta=None):
+    """create access token"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -289,20 +304,23 @@ def create_access_token(data, expires_delta=None):
     return encoded_jwt
 
 
-@app.post("/login")
+@app.post("/api/v1/users/login")
 async def login_for_access_token(
         form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(session_opener)
 ):
+    """login"""
     user = check_user_password_is_correct(db, form_data.username, form_data.password)
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": str(user.username)}, expires_delta=access_token_expires
+        data={"sub": str(user.username)}, expires_delta=timedelta(minutes=30)
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-
-@app.post("/register")
-def create_user(user, db: Session = Depends(session_opener)):
+class UserAuthSchema(BaseModel):
+    username: str
+    password: str
+@app.post("/api/v1/users/register")
+def create_user(user: UserAuthSchema, db: Session = Depends(session_opener)):
+    """create user"""
     hashed_password = pwd_context.hash(user.password)
     db_user = User(username=user.username, hashed_password=hashed_password)
     db.add(db_user)
@@ -311,7 +329,7 @@ def create_user(user, db: Session = Depends(session_opener)):
     return db_user
 
 
-@app.get("/me")
+@app.get("/api/v1/users/me")
 def read_users_me(user=Depends(authenticate_user_token)):
     return {"username": user.username}
 
@@ -336,8 +354,14 @@ def get_article_upvote_details(article_id, uid, db):
     return cnt, voted
 
 
-@app.get("/news")
+@app.get("/api/v1/news/news")
 def read_news(db=Depends(session_opener)):
+    """
+    read new
+
+    :param db:
+    :return:
+    """
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
     for n in news:
@@ -349,12 +373,19 @@ def read_news(db=Depends(session_opener)):
 
 
 @app.get(
-    "/user_news"
+    "/api/v1/news/user_news"
 )
 def read_user_news(
         db=Depends(session_opener),
         u=Depends(authenticate_user_token)
 ):
+    """
+    read user new
+
+    :param db:
+    :param u:
+    :return:
+    """
     news = db.query(NewsArticle).order_by(NewsArticle.time.desc()).all()
     result = []
     for article in news:
@@ -368,9 +399,11 @@ def read_user_news(
         )
     return result
 
+class PromptRequest(BaseModel):
+    prompt: str
 
-@app.post("/search_news")
-async def search_news(request):
+@app.post("/api/v1/news/search_news")
+async def search_news(request: PromptRequest):
     prompt = request.prompt
     news_list = []
     m = [
@@ -413,10 +446,12 @@ async def search_news(request):
         news_list.append(detailed_news)
     return sorted(news_list, key=lambda x: x["time"], reverse=True)
 
+class NewsSumaryRequestSchema(BaseModel):
+    content: str
 
-@app.post("/news_summary")
+@app.post("/api/v1/news/news_summary")
 async def news_summary(
-        payload, u=Depends(authenticate_user_token)
+        payload: NewsSumaryRequestSchema, u=Depends(authenticate_user_token)
 ):
     response = {}
     m = [
@@ -439,7 +474,7 @@ async def news_summary(
     return response
 
 
-@app.post("/{id}/upvote")
+@app.post("/api/v1/news/{id}/upvote")
 def upvote_article(
         id,
         db=Depends(session_opener),
@@ -478,7 +513,7 @@ def news_exists(id2, db: Session):
     return db.query(NewsArticle).filter_by(id=id2).first() is not None
 
 
-@app.get("/necessities-price")
+@app.get("/api/v1/prices/necessities-price")
 def get_necessities_prices(
         category=Query(None), commodity=Query(None)
 ):
